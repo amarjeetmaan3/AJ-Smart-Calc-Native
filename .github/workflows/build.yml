@@ -3,7 +3,7 @@ name: Build Android APK
 on:
   push:
     branches: [ "main" ]
-  workflow_dispatch: # This allows you to trigger a build manually
+  workflow_dispatch:
 
 jobs:
   build:
@@ -26,10 +26,18 @@ jobs:
         run: chmod +x gradlew
 
       - name: Build Debug APK
-        run: ./gradlew assembleDebug --stacktrace
+        run: ./gradlew assembleDebug --stacktrace | tee error_log.txt
 
       - name: Upload APK
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: AJ-Smart-Calc-APK
           path: app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Upload Error Log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Error-Log
+          path: error_log.txt
