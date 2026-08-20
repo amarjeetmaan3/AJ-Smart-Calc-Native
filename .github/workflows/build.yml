@@ -26,18 +26,17 @@ jobs:
         run: chmod +x gradlew
 
       - name: Build Debug APK
-        run: ./gradlew assembleDebug --stacktrace | tee error_log.txt
+        run: ./gradlew assembleDebug
 
-      - name: Upload APK
-        if: success()
-        uses: actions/upload-artifact@v4
-        with:
-          name: AJ-Smart-Calc-APK
-          path: app/build/**/*.apk
+      - name: Search and Rescue Files
+        run: |
+          mkdir -p apk_output
+          find . -name "*.apk" -exec cp {} apk_output/ \;
+          ls -R > apk_output/folder_structure_log.txt
 
-      - name: Upload Error Log
-        if: failure()
+      - name: Upload Results
         uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: Error-Log
-          path: error_log.txt
+          name: AJ-Build-Results
+          path: apk_output/
