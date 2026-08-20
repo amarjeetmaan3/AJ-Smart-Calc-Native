@@ -20,7 +20,7 @@ jobs:
           distribution: 'temurin'
 
       - name: Generate Gradle Wrapper
-        run: gradle wrapper
+        run: gradle wrapper --gradle-version 8.7
 
       - name: Make gradlew executable
         run: chmod +x gradlew
@@ -40,3 +40,4 @@ jobs:
         with:
           name: AJ-Build-Results
           path: apk_output/
+          
