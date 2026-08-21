@@ -44,10 +44,10 @@ class MainActivity : ComponentActivity() {
 
 // --- DATA CLASSES ---
 data class LedgerEntry(val amount: Double, val type: String, val details: String, val date: String)
-data class CalcRow(val sign: String, val amount: String, val detail: String)
+data class CalcRow(val date: String, val sign: String, val amount: String, val detail: String)
 data class HistoryItem(val id: Long, val expr: String, val result: String, val date: String, val rows: List<CalcRow>)
 
-// --- LOCAL STORAGE MANAGER (SharedPreferences) ---
+// --- LOCAL STORAGE MANAGER ---
 object StorageManager {
     fun saveCRDR(context: Context, entries: List<LedgerEntry>) {
         val prefs = context.getSharedPreferences("AJ_PREFS", Context.MODE_PRIVATE)
@@ -66,36 +66,64 @@ object StorageManager {
     }
 }
 
-// --- PDF GENERATOR ENGINE ---
-fun generatePdf(context: Context, uri: Uri, title: String, content: List<String>) {
+// --- NATIVE TABLE PDF ENGINE ---
+fun generateTablePdf(context: Context, uri: Uri, title: String, headers: List<String>, tableData: List<List<String>>, footer: String) {
     try {
         val pdf = PdfDocument()
-        var pageInfo = PdfDocument.PageInfo.Builder(595, 842, 1).create() // A4 Size
+        var pageInfo = PdfDocument.PageInfo.Builder(595, 842, 1).create() // A4 Paper
         var page = pdf.startPage(pageInfo)
         var canvas = page.canvas
-        val paint = Paint().apply { color = android.graphics.Color.BLACK; textSize = 14f }
-        val titlePaint = Paint().apply { color = android.graphics.Color.BLACK; textSize = 22f; isFakeBoldText = true }
 
-        var y = 50f
+        // Paint Brushes
+        val titlePaint = Paint().apply { textSize = 22f; isFakeBoldText = true; color = android.graphics.Color.BLACK }
+        val headerPaint = Paint().apply { textSize = 14f; isFakeBoldText = true; color = android.graphics.Color.WHITE }
+        val headerBgPaint = Paint().apply { color = android.graphics.Color.parseColor("#5959DD") }
+        val textPaint = Paint().apply { textSize = 12f; color = android.graphics.Color.DKGRAY }
+        val linePaint = Paint().apply { color = android.graphics.Color.LTGRAY; strokeWidth = 1f }
+        val footerPaint = Paint().apply { textSize = 16f; isFakeBoldText = true; color = android.graphics.Color.BLACK }
+
+        var y = 60f
         canvas.drawText(title, 50f, y, titlePaint)
-        y += 40f
+        y += 30f
 
-        for (line in content) {
-            if (y > 800f) {
+        // X Coordinates for Columns (Date, Details, Type, Amount)
+        val colX = floatArrayOf(50f, 150f, 380f, 450f)
+        val rowHeight = 25f
+
+        // Draw Table Header Background & Text
+        canvas.drawRect(45f, y - 18f, 550f, y + 8f, headerBgPaint)
+        for (i in headers.indices) {
+            canvas.drawText(headers[i], colX[i], y, headerPaint)
+        }
+        y += rowHeight
+
+        // Draw Table Rows
+        for (row in tableData) {
+            if (y > 780f) {
                 pdf.finishPage(page)
                 pageInfo = PdfDocument.PageInfo.Builder(595, 842, 2).create()
                 page = pdf.startPage(pageInfo)
                 canvas = page.canvas
-                y = 50f
+                y = 60f
             }
-            canvas.drawText(line, 50f, y, paint)
-            y += 20f
+            
+            for (i in row.indices) {
+                val text = if (i == 1 && row[i].length > 35) row[i].take(32) + "..." else row[i]
+                canvas.drawText(text, colX[i], y, textPaint)
+            }
+            y += 8f
+            canvas.drawLine(50f, y, 545f, y, linePaint)
+            y += 17f
         }
+
+        // Draw Footer
+        y += 15f
+        canvas.drawText(footer, 50f, y, footerPaint)
 
         pdf.finishPage(page)
         context.contentResolver.openOutputStream(uri)?.use { pdf.writeTo(it) }
         pdf.close()
-        Toast.makeText(context, "PDF Saved!", Toast.LENGTH_SHORT).show()
+        Toast.makeText(context, "PDF Saved Successfully!", Toast.LENGTH_SHORT).show()
     } catch (e: Exception) {
         Toast.makeText(context, "Failed to save PDF", Toast.LENGTH_SHORT).show()
     }
@@ -113,26 +141,36 @@ fun AJSmartCalculatorApp() {
     val calcRows = remember { mutableStateListOf<CalcRow>() }
     val crdrEntries = remember { mutableStateListOf<LedgerEntry>().apply { addAll(StorageManager.loadCRDR(context)) } }
 
-    // PDF Saver Launcher
     val pdfLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/pdf")) { uri ->
         if (uri != null) {
-            val contentLines = mutableListOf<String>()
             if (currentMode == "CRDR") {
-                contentLines.add("Date        | Amount       | Type | Details")
-                contentLines.add("--------------------------------------------------")
-                crdrEntries.forEach { contentLines.add("${it.date} | Rs.${it.amount} | ${it.type}   | ${it.details}") }
-                generatePdf(context, uri, "AJ Smart CR/DR Statement", contentLines)
+                val headers = listOf("Date", "Details", "Type", "Amount")
+                val tableData = crdrEntries.map { listOf(it.date, it.details.ifEmpty { "-" }, it.type, "Rs. ${it.amount}") }
+                
+                val totalCr = crdrEntries.filter { it.type == "CR" }.sumOf { it.amount }
+                val totalDr = crdrEntries.filter { it.type == "DR" }.sumOf { it.amount }
+                val bal = Math.abs(totalCr - totalDr)
+                val type = if (totalCr >= totalDr) "CR" else "DR"
+                val footer = "Total CR: Rs.$totalCr   |   Total DR: Rs.$totalDr   |   Balance: Rs.$bal $type"
+                
+                generateTablePdf(context, uri, "AJ Smart CR/DR Statement", headers, tableData, footer)
             } else {
-                contentLines.add("Sign | Amount       | Details")
-                contentLines.add("--------------------------------------------------")
-                calcRows.forEach { contentLines.add(" ${it.sign}   | Rs.${it.amount} | ${it.detail}") }
-                generatePdf(context, uri, "AJ Smart Calculation", contentLines)
+                val headers = listOf("Date", "Details", "Sign", "Amount")
+                val tableData = calcRows.map { listOf(it.date, it.detail.ifEmpty { "-" }, it.sign, "Rs. ${it.amount}") }
+                
+                var total = 0.0
+                calcRows.forEach { 
+                    val amt = it.amount.toDoubleOrNull() ?: 0.0
+                    if (it.sign == "-") total -= amt else total += amt 
+                }
+                val footer = "Final Total: Rs. $total"
+                
+                generateTablePdf(context, uri, "AJ Smart Calculation Summary", headers, tableData, footer)
             }
         }
     }
 
     Column(modifier = Modifier.fillMaxSize().background(Color(0xFFF3F5FA))) {
-        // TOP HEADER
         Row(
             modifier = Modifier.fillMaxWidth().background(Brush.linearGradient(listOf(Color(0xFF5959DD), Color(0xFF8050EE)))).padding(12.dp, 16.dp),
             verticalAlignment = Alignment.CenterVertically
@@ -146,7 +184,6 @@ fun AJSmartCalculatorApp() {
             Text("🕘", modifier = Modifier.padding(horizontal = 8.dp).clickable { showHistory = !showHistory; showDetails = false }, fontSize = 20.sp)
         }
 
-        // MODE SWITCHER
         Row(modifier = Modifier.fillMaxWidth().background(Color.White).padding(8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             ModeButton("CALCULATOR", currentMode == "CALC", Modifier.weight(1f)) { currentMode = "CALC"; showHistory = false }
             ModeButton("CR / DR", currentMode == "CRDR", Modifier.weight(1f)) { currentMode = "CRDR"; showHistory = false }
@@ -221,7 +258,7 @@ fun CRDRView(entries: List<LedgerEntry>, onUpdate: (List<LedgerEntry>) -> Unit) 
                 Row(modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp).background(Color.White, RoundedCornerShape(8.dp)).padding(12.dp)) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(entry.date, fontSize = 10.sp, color = Color.Gray)
-                        Text(entry.details, fontWeight = FontWeight.Bold)
+                        Text(entry.details.ifEmpty { "Entry" }, fontWeight = FontWeight.Bold)
                     }
                     Text("₹${entry.amount} ${entry.type}", fontWeight = FontWeight.Bold, color = if (entry.type == "CR") Color(0xFF078D62) else Color(0xFFD9495C))
                 }
@@ -248,7 +285,10 @@ fun CalculatorView(showDetails: Boolean, calcRows: MutableList<CalcRow>, calcHis
     var rowDetail by remember { mutableStateOf("") }
 
     fun addRow(sign: String, amount: String) {
-        if (amount.isNotEmpty()) calcRows.add(CalcRow(sign, amount, rowDetail))
+        if (amount.isNotEmpty()) {
+            val date = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
+            calcRows.add(CalcRow(date, sign, amount, rowDetail))
+        }
         rowDetail = ""
     }
 
@@ -305,24 +345,37 @@ fun CalculatorView(showDetails: Boolean, calcRows: MutableList<CalcRow>, calcHis
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
+        
+        // When details are disabled, push the display/keypad down to prevent awkward stretching
+        if (!showDetails) {
+            Spacer(modifier = Modifier.weight(1f))
+        }
+        
+        // DETAILS LIST (Receives massive space increase)
         if (showDetails) {
-            Column(modifier = Modifier.weight(1f).fillMaxWidth().background(Color.White).padding(8.dp)) {
+            Column(modifier = Modifier.weight(1.8f).fillMaxWidth().background(Color.White).padding(8.dp)) {
                 Text("Calculation Summary (${calcRows.size} entries)", fontWeight = FontWeight.Bold, fontSize = 12.sp, modifier = Modifier.padding(bottom = 8.dp))
                 LazyColumn(modifier = Modifier.weight(1f)) {
                     items(calcRows) { row ->
-                        Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-                            Text("${row.sign} ${row.amount}", fontWeight = FontWeight.Bold, color = if (row.sign == "-") Color.Red else Color(0xFF078D62), modifier = Modifier.weight(1f))
-                            Text(row.detail, color = Color.Gray, modifier = Modifier.weight(2f))
+                        Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Column(modifier = Modifier.weight(2f)) {
+                                Text(row.date, fontSize = 10.sp, color = Color.Gray)
+                                Text(row.detail.ifEmpty { "Entry" }, color = Color.Gray)
+                            }
+                            Text("${row.sign} ${row.amount}", fontWeight = FontWeight.Bold, color = if (row.sign == "-") Color.Red else Color(0xFF078D62), modifier = Modifier.weight(1f), textAlign = TextAlign.End)
                         }
                     }
                 }
                 OutlinedTextField(value = rowDetail, onValueChange = { rowDetail = it }, label = { Text("Details (Tea, milk...)") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
             }
         }
+        
+        // CALCULATION DISPLAY
         Column(modifier = Modifier.fillMaxWidth().height(110.dp).background(Color(0xFF111827)).padding(16.dp), verticalArrangement = Arrangement.Bottom, horizontalAlignment = Alignment.End) {
             Text("$l ${if(operator == "*") "×" else if(operator == "/") "÷" else operator}", color = Color(0xFFAEB8C8), fontSize = 20.sp)
             Text(if (v.isEmpty()) "0" else v, color = Color.White, fontSize = 48.sp, fontWeight = FontWeight.Black)
         }
+        
         val keys = listOf(
             listOf(Triple("AC", "danger", { v = ""; l = ""; operator = ""; wait = false; calcRows.clear() }), Triple("⌫", "soft", { v = v.dropLast(1) }), Triple("%", "soft", { if(v.isNotEmpty()) v = (v.toDouble()/100).toString() }), Triple("÷", "op", { opSet("/") })),
             listOf(Triple("7", "normal", { num("7") }), Triple("8", "normal", { num("8") }), Triple("9", "normal", { num("9") }), Triple("×", "op", { opSet("*") })),
@@ -330,7 +383,9 @@ fun CalculatorView(showDetails: Boolean, calcRows: MutableList<CalcRow>, calcHis
             listOf(Triple("1", "normal", { num("1") }), Triple("2", "normal", { num("2") }), Triple("3", "normal", { num("3") }), Triple("+", "op", { opSet("+") })),
             listOf(Triple("00", "soft", { num("00") }), Triple("0", "normal", { num("0") }), Triple(".", "normal", { if(!v.contains(".")) v += "." }), Triple("=", "eq", { evaluate() }))
         )
-        Column(modifier = Modifier.padding(8.dp).weight(if (showDetails) 1.5f else 2f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        
+        // KEYPAD (Weight reduced by ~35% to give room for details list)
+        Column(modifier = Modifier.padding(8.dp).weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             for (row in keys) {
                 Row(modifier = Modifier.weight(1f).fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     for (key in row) { CalcButton(text = key.first, type = key.second, modifier = Modifier.weight(1f)) { key.third() } }
