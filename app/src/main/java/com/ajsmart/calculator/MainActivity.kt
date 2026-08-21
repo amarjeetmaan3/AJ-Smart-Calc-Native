@@ -34,12 +34,19 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-// Data Class for CR/DR
+// Data Classes
 data class LedgerEntry(val amount: Double, val type: String, val details: String, val date: String)
+data class CalcRow(val sign: String, val amount: String, val detail: String)
+data class HistoryItem(val expr: String, val result: String, val date: String, val rows: List<CalcRow>)
 
 @Composable
 fun AJSmartCalculatorApp() {
     var currentMode by remember { mutableStateOf("CALC") }
+    var showDetails by remember { mutableStateOf(false) }
+    var showHistory by remember { mutableStateOf(false) }
+    
+    val calcHistory = remember { mutableStateListOf<HistoryItem>() }
+    val calcRows = remember { mutableStateListOf<CalcRow>() }
 
     Column(modifier = Modifier.fillMaxSize().background(Color(0xFFF3F5FA))) {
         // TOP HEADER
@@ -51,6 +58,11 @@ fun AJSmartCalculatorApp() {
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text("AJ Smart Calculator", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Black, modifier = Modifier.weight(1f))
+            
+            // Toolbar Options
+            Text("📝", modifier = Modifier.padding(horizontal = 8.dp).clickable { showDetails = !showDetails; showHistory = false }, fontSize = 20.sp)
+            Text("📄", modifier = Modifier.padding(horizontal = 8.dp).clickable { /* PDF implementation next */ }, fontSize = 20.sp)
+            Text("🕘", modifier = Modifier.padding(horizontal = 8.dp).clickable { showHistory = !showHistory; showDetails = false }, fontSize = 20.sp)
         }
 
         // MODE SWITCHER
@@ -58,12 +70,15 @@ fun AJSmartCalculatorApp() {
             modifier = Modifier.fillMaxWidth().background(Color.White).padding(8.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            ModeButton("CALCULATOR", currentMode == "CALC", Modifier.weight(1f)) { currentMode = "CALC" }
-            ModeButton("CR / DR", currentMode == "CRDR", Modifier.weight(1f)) { currentMode = "CRDR" }
+            ModeButton("CALCULATOR", currentMode == "CALC", Modifier.weight(1f)) { currentMode = "CALC"; showHistory = false }
+            ModeButton("CR / DR", currentMode == "CRDR", Modifier.weight(1f)) { currentMode = "CRDR"; showHistory = false }
         }
 
-        if (currentMode == "CALC") {
-            CalculatorView()
+        // VIEW ROUTING
+        if (showHistory) {
+            HistoryView(calcHistory) { showHistory = false }
+        } else if (currentMode == "CALC") {
+            CalculatorView(showDetails, calcRows, calcHistory)
         } else {
             CRDRView()
         }
@@ -85,6 +100,33 @@ fun ModeButton(text: String, isActive: Boolean, modifier: Modifier = Modifier, o
 }
 
 @Composable
+fun HistoryView(history: List<HistoryItem>, onClose: () -> Unit) {
+    Column(modifier = Modifier.fillMaxSize().padding(12.dp)) {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Text("Calculation History", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+            Button(onClick = onClose, colors = ButtonDefaults.buttonColors(containerColor = Color.LightGray)) { Text("Close", color = Color.Black) }
+        }
+        Spacer(modifier = Modifier.height(12.dp))
+        
+        if (history.isEmpty()) {
+            Text("No calculations yet.", color = Color.Gray, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
+        } else {
+            LazyColumn(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(history) { item ->
+                    Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = Color.White)) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Text(item.expr, color = Color.Gray, fontSize = 14.sp)
+                            Text("= ${item.result}", fontWeight = FontWeight.Black, fontSize = 24.sp, color = Color(0xFF172033))
+                            Text(item.date, fontSize = 10.sp, color = Color.Gray)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 fun CRDRView() {
     var amountInput by remember { mutableStateOf("") }
     var detailInput by remember { mutableStateOf("") }
@@ -97,7 +139,6 @@ fun CRDRView() {
     val balanceType = if (totalCr >= totalDr) "CR" else "DR"
 
     Column(modifier = Modifier.fillMaxSize().padding(12.dp)) {
-        // Balances
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             BalanceCard("TOTAL CR", "₹$totalCr", Modifier.weight(1f))
             BalanceCard("TOTAL DR", "₹$totalDr", Modifier.weight(1f))
@@ -106,38 +147,20 @@ fun CRDRView() {
 
         Spacer(modifier = Modifier.height(12.dp))
 
-        // Input Form
-        Card(
-            modifier = Modifier.fillMaxWidth().shadow(4.dp, RoundedCornerShape(12.dp)),
-            colors = CardDefaults.cardColors(containerColor = Color.White)
-        ) {
+        Card(modifier = Modifier.fillMaxWidth().shadow(4.dp, RoundedCornerShape(12.dp)), colors = CardDefaults.cardColors(containerColor = Color.White)) {
             Column(modifier = Modifier.padding(12.dp)) {
-                OutlinedTextField(
-                    value = amountInput, 
-                    onValueChange = { amountInput = it },
-                    label = { Text("Amount") },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true
-                )
+                OutlinedTextField(value = amountInput, onValueChange = { amountInput = it }, label = { Text("Amount") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
                 Row(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     Button(onClick = { selectedType = "CR" }, colors = ButtonDefaults.buttonColors(containerColor = if (selectedType == "CR") Color(0xFF078D62) else Color.LightGray), modifier = Modifier.weight(1f)) { Text("CR") }
                     Button(onClick = { selectedType = "DR" }, colors = ButtonDefaults.buttonColors(containerColor = if (selectedType == "DR") Color(0xFFD9495C) else Color.LightGray), modifier = Modifier.weight(1f)) { Text("DR") }
                 }
-                OutlinedTextField(
-                    value = detailInput, 
-                    onValueChange = { detailInput = it },
-                    label = { Text("Message / Details") },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true
-                )
+                OutlinedTextField(value = detailInput, onValueChange = { detailInput = it }, label = { Text("Message / Details") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
                 Button(
                     onClick = {
-                        val amt = amountInput.toDoubleOrNull()
-                        if (amt != null) {
+                        amountInput.toDoubleOrNull()?.let { amt ->
                             val date = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
                             entries.add(LedgerEntry(amt, selectedType, detailInput, date))
-                            amountInput = ""
-                            detailInput = ""
+                            amountInput = ""; detailInput = ""
                         }
                     },
                     modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
@@ -147,8 +170,6 @@ fun CRDRView() {
         }
 
         Spacer(modifier = Modifier.height(12.dp))
-
-        // List
         LazyColumn(modifier = Modifier.fillMaxSize()) {
             items(entries) { entry ->
                 Row(modifier = Modifier.fillMaxWidth().background(Color.White, RoundedCornerShape(8.dp)).padding(12.dp).padding(bottom = 4.dp)) {
@@ -156,11 +177,7 @@ fun CRDRView() {
                         Text(entry.date, fontSize = 10.sp, color = Color.Gray)
                         Text(entry.details, fontWeight = FontWeight.Bold)
                     }
-                    Text(
-                        text = "₹${entry.amount} ${entry.type}",
-                        fontWeight = FontWeight.Bold,
-                        color = if (entry.type == "CR") Color(0xFF078D62) else Color(0xFFD9495C)
-                    )
+                    Text("₹${entry.amount} ${entry.type}", fontWeight = FontWeight.Bold, color = if (entry.type == "CR") Color(0xFF078D62) else Color(0xFFD9495C))
                 }
             }
         }
@@ -169,24 +186,29 @@ fun CRDRView() {
 
 @Composable
 fun BalanceCard(title: String, amount: String, modifier: Modifier = Modifier) {
-    Column(
-        modifier = modifier.background(Color.White, RoundedCornerShape(8.dp)).padding(8.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
+    Column(modifier = modifier.background(Color.White, RoundedCornerShape(8.dp)).padding(8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         Text(title, fontSize = 10.sp, color = Color.Gray)
         Text(amount, fontWeight = FontWeight.Bold, fontSize = 14.sp)
     }
 }
 
 @Composable
-fun CalculatorView() {
+fun CalculatorView(showDetails: Boolean, calcRows: MutableList<CalcRow>, calcHistory: MutableList<HistoryItem>) {
     var v by remember { mutableStateOf("") }
     var l by remember { mutableStateOf("") }
     var operator by remember { mutableStateOf("") }
     var wait by remember { mutableStateOf(false) }
+    var rowDetail by remember { mutableStateOf("") }
+
+    fun addRow(sign: String, amount: String) {
+        if (amount.isNotEmpty()) calcRows.add(CalcRow(sign, amount, rowDetail))
+        rowDetail = ""
+    }
 
     fun evaluate() {
         if (l.isEmpty() || operator.isEmpty() || v.isEmpty()) return
+        if (showDetails) addRow(operator, v)
+        
         val a = l.toDoubleOrNull() ?: 0.0
         val b = v.toDoubleOrNull() ?: 0.0
         var r = 0.0
@@ -196,10 +218,18 @@ fun CalculatorView() {
             "*" -> r = a * b
             "/" -> if (b != 0.0) r = a / b
         }
-        v = if (r % 1.0 == 0.0) r.toLong().toString() else r.toString()
+        
+        val resultStr = if (r % 1.0 == 0.0) r.toLong().toString() else r.toString()
+        val expr = "$l $operator $v"
+        val date = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date())
+        
+        calcHistory.add(0, HistoryItem(expr, resultStr, date, calcRows.toList()))
+        
+        v = resultStr
         l = ""
         operator = ""
         wait = true
+        calcRows.clear()
     }
 
     fun num(n: String) {
@@ -212,7 +242,6 @@ fun CalculatorView() {
     fun opSet(o: String) {
         if (v.isEmpty() && l.isEmpty()) return
         
-        // This fixes the chaining bug (e.g. 100 + 20 + 30)
         if (l.isNotEmpty() && v.isNotEmpty() && operator.isNotEmpty()) {
             evaluate()
             l = v
@@ -223,6 +252,7 @@ fun CalculatorView() {
         }
         
         if (v.isNotEmpty()) {
+            if (showDetails && l.isEmpty()) addRow("", v)
             l = v
             v = ""
             wait = false
@@ -231,8 +261,30 @@ fun CalculatorView() {
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
+        
+        if (showDetails) {
+            Column(modifier = Modifier.weight(1f).fillMaxWidth().background(Color.White).padding(8.dp)) {
+                Text("Calculation Summary (${calcRows.size} entries)", fontWeight = FontWeight.Bold, fontSize = 12.sp, modifier = Modifier.padding(bottom = 8.dp))
+                LazyColumn(modifier = Modifier.weight(1f)) {
+                    items(calcRows) { row ->
+                        Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                            Text("${row.sign} ${row.amount}", fontWeight = FontWeight.Bold, color = if (row.sign == "-") Color.Red else Color(0xFF078D62), modifier = Modifier.weight(1f))
+                            Text(row.detail, color = Color.Gray, modifier = Modifier.weight(2f))
+                        }
+                    }
+                }
+                OutlinedTextField(
+                    value = rowDetail, 
+                    onValueChange = { rowDetail = it }, 
+                    label = { Text("Details (Tea, milk...)") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+            }
+        }
+
         Column(
-            modifier = Modifier.fillMaxWidth().height(130.dp).background(Color(0xFF111827)).padding(16.dp),
+            modifier = Modifier.fillMaxWidth().height(110.dp).background(Color(0xFF111827)).padding(16.dp),
             verticalArrangement = Arrangement.Bottom,
             horizontalAlignment = Alignment.End
         ) {
@@ -241,14 +293,14 @@ fun CalculatorView() {
         }
 
         val keys = listOf(
-            listOf(Triple("AC", "danger", { v = ""; l = ""; operator = ""; wait = false }), Triple("⌫", "soft", { v = v.dropLast(1) }), Triple("%", "soft", { if(v.isNotEmpty()) v = (v.toDouble()/100).toString() }), Triple("÷", "op", { opSet("/") })),
+            listOf(Triple("AC", "danger", { v = ""; l = ""; operator = ""; wait = false; calcRows.clear() }), Triple("⌫", "soft", { v = v.dropLast(1) }), Triple("%", "soft", { if(v.isNotEmpty()) v = (v.toDouble()/100).toString() }), Triple("÷", "op", { opSet("/") })),
             listOf(Triple("7", "normal", { num("7") }), Triple("8", "normal", { num("8") }), Triple("9", "normal", { num("9") }), Triple("×", "op", { opSet("*") })),
             listOf(Triple("4", "normal", { num("4") }), Triple("5", "normal", { num("5") }), Triple("6", "normal", { num("6") }), Triple("−", "op", { opSet("-") })),
             listOf(Triple("1", "normal", { num("1") }), Triple("2", "normal", { num("2") }), Triple("3", "normal", { num("3") }), Triple("+", "op", { opSet("+") })),
             listOf(Triple("00", "soft", { num("00") }), Triple("0", "normal", { num("0") }), Triple(".", "normal", { if(!v.contains(".")) v += "." }), Triple("=", "eq", { evaluate() }))
         )
 
-        Column(modifier = Modifier.padding(8.dp).weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(modifier = Modifier.padding(8.dp).weight(if (showDetails) 1.5f else 2f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             for (row in keys) {
                 Row(modifier = Modifier.weight(1f).fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     for (key in row) {
