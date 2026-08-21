@@ -1,5 +1,6 @@
 package com.ajsmart.calculator
 
+import android.app.DatePickerDialog
 import android.content.Context
 import android.graphics.Paint
 import android.graphics.pdf.PdfDocument
@@ -30,6 +31,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 
@@ -67,14 +69,13 @@ object StorageManager {
 }
 
 // --- NATIVE TABLE PDF ENGINE ---
-fun generateTablePdf(context: Context, uri: Uri, title: String, headers: List<String>, tableData: List<List<String>>, footer: String) {
+fun generateTablePdf(context: Context, uri: Uri, title: String, headers: List<String>, colX: FloatArray, tableData: List<List<String>>, footer: String) {
     try {
         val pdf = PdfDocument()
         var pageInfo = PdfDocument.PageInfo.Builder(595, 842, 1).create() // A4 Paper
         var page = pdf.startPage(pageInfo)
         var canvas = page.canvas
 
-        // Paint Brushes
         val titlePaint = Paint().apply { textSize = 22f; isFakeBoldText = true; color = android.graphics.Color.BLACK }
         val headerPaint = Paint().apply { textSize = 14f; isFakeBoldText = true; color = android.graphics.Color.WHITE }
         val headerBgPaint = Paint().apply { color = android.graphics.Color.parseColor("#5959DD") }
@@ -86,18 +87,12 @@ fun generateTablePdf(context: Context, uri: Uri, title: String, headers: List<St
         canvas.drawText(title, 50f, y, titlePaint)
         y += 30f
 
-        // X Coordinates for Columns (Date, Details, Type, Amount)
-        val colX = floatArrayOf(50f, 150f, 380f, 450f)
-        val rowHeight = 25f
-
-        // Draw Table Header Background & Text
         canvas.drawRect(45f, y - 18f, 550f, y + 8f, headerBgPaint)
         for (i in headers.indices) {
             canvas.drawText(headers[i], colX[i], y, headerPaint)
         }
-        y += rowHeight
+        y += 25f
 
-        // Draw Table Rows
         for (row in tableData) {
             if (y > 780f) {
                 pdf.finishPage(page)
@@ -116,7 +111,6 @@ fun generateTablePdf(context: Context, uri: Uri, title: String, headers: List<St
             y += 17f
         }
 
-        // Draw Footer
         y += 15f
         canvas.drawText(footer, 50f, y, footerPaint)
 
@@ -135,16 +129,23 @@ fun AJSmartCalculatorApp() {
     var currentMode by remember { mutableStateOf("CALC") }
     var showDetails by remember { mutableStateOf(false) }
     var showHistory by remember { mutableStateOf(false) }
+    var dateOn by remember { mutableStateOf(false) }
     val context = LocalContext.current
 
     val calcHistory = remember { mutableStateListOf<HistoryItem>() }
     val calcRows = remember { mutableStateListOf<CalcRow>() }
     val crdrEntries = remember { mutableStateListOf<LedgerEntry>().apply { addAll(StorageManager.loadCRDR(context)) } }
 
+    // PDF Dialog States
+    var showPdfDialog by remember { mutableStateOf(false) }
+    var pdfTitleInput by remember { mutableStateOf("") }
+    var finalPdfTitle by remember { mutableStateOf("") }
+
     val pdfLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/pdf")) { uri ->
         if (uri != null) {
             if (currentMode == "CRDR") {
                 val headers = listOf("Date", "Details", "Type", "Amount")
+                val colX = floatArrayOf(50f, 150f, 380f, 450f)
                 val tableData = crdrEntries.map { listOf(it.date, it.details.ifEmpty { "-" }, it.type, "Rs. ${it.amount}") }
                 
                 val totalCr = crdrEntries.filter { it.type == "CR" }.sumOf { it.amount }
@@ -153,10 +154,14 @@ fun AJSmartCalculatorApp() {
                 val type = if (totalCr >= totalDr) "CR" else "DR"
                 val footer = "Total CR: Rs.$totalCr   |   Total DR: Rs.$totalDr   |   Balance: Rs.$bal $type"
                 
-                generateTablePdf(context, uri, "AJ Smart CR/DR Statement", headers, tableData, footer)
+                generateTablePdf(context, uri, finalPdfTitle, headers, colX, tableData, footer)
             } else {
-                val headers = listOf("Date", "Details", "Sign", "Amount")
-                val tableData = calcRows.map { listOf(it.date, it.detail.ifEmpty { "-" }, it.sign, "Rs. ${it.amount}") }
+                val headers = if (dateOn) listOf("Date", "Details", "Sign", "Amount") else listOf("Details", "Sign", "Amount")
+                val colX = if (dateOn) floatArrayOf(50f, 140f, 380f, 450f) else floatArrayOf(50f, 350f, 420f)
+                val tableData = calcRows.map { 
+                    if (dateOn) listOf(it.date, it.detail.ifEmpty { "-" }, it.sign, "Rs. ${it.amount}") 
+                    else listOf(it.detail.ifEmpty { "-" }, it.sign, "Rs. ${it.amount}")
+                }
                 
                 var total = 0.0
                 calcRows.forEach { 
@@ -165,9 +170,43 @@ fun AJSmartCalculatorApp() {
                 }
                 val footer = "Final Total: Rs. $total"
                 
-                generateTablePdf(context, uri, "AJ Smart Calculation Summary", headers, tableData, footer)
+                generateTablePdf(context, uri, finalPdfTitle, headers, colX, tableData, footer)
             }
         }
+    }
+
+    if (showPdfDialog) {
+        AlertDialog(
+            onDismissRequest = { showPdfDialog = false },
+            title = { Text("PDF Name", fontWeight = FontWeight.Bold) },
+            text = {
+                Column {
+                    Text("This name appears at the top of the PDF.", fontSize = 12.sp, color = Color.Gray)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = pdfTitleInput,
+                        onValueChange = { pdfTitleInput = it },
+                        placeholder = { Text("Example: Raj Kumar Account") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        finalPdfTitle = if (pdfTitleInput.isNotBlank()) pdfTitleInput else "AJ Smart Calculator"
+                        val fileName = if (currentMode == "CRDR") "AJ_CRDR_Report.pdf" else "AJ_Calc_Report.pdf"
+                        pdfLauncher.launch(fileName)
+                        showPdfDialog = false
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF5959DD))
+                ) { Text("Continue") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showPdfDialog = false }) { Text("Cancel", color = Color.Gray) }
+            }
+        )
     }
 
     Column(modifier = Modifier.fillMaxSize().background(Color(0xFFF3F5FA))) {
@@ -177,9 +216,10 @@ fun AJSmartCalculatorApp() {
         ) {
             Text("AJ Smart Calculator", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Black, modifier = Modifier.weight(1f))
             Text("📝", modifier = Modifier.padding(horizontal = 8.dp).clickable { showDetails = !showDetails; showHistory = false }, fontSize = 20.sp)
+            Text("📅", modifier = Modifier.padding(horizontal = 8.dp).clickable { dateOn = !dateOn }, fontSize = 20.sp, color = if(dateOn) Color.White else Color(0x77FFFFFF))
             Text("📄", modifier = Modifier.padding(horizontal = 8.dp).clickable { 
-                val fileName = if (currentMode == "CRDR") "AJ_CRDR_Report.pdf" else "AJ_Calc_Report.pdf"
-                pdfLauncher.launch(fileName) 
+                pdfTitleInput = ""
+                showPdfDialog = true 
             }, fontSize = 20.sp)
             Text("🕘", modifier = Modifier.padding(horizontal = 8.dp).clickable { showHistory = !showHistory; showDetails = false }, fontSize = 20.sp)
         }
@@ -192,7 +232,7 @@ fun AJSmartCalculatorApp() {
         if (showHistory) {
             HistoryView(calcHistory) { showHistory = false }
         } else if (currentMode == "CALC") {
-            CalculatorView(showDetails, calcRows, calcHistory)
+            CalculatorView(showDetails, dateOn, calcRows, calcHistory)
         } else {
             CRDRView(crdrEntries) { updatedList ->
                 crdrEntries.clear()
@@ -213,9 +253,20 @@ fun ModeButton(text: String, isActive: Boolean, modifier: Modifier = Modifier, o
 // --- CR/DR LOGIC ---
 @Composable
 fun CRDRView(entries: List<LedgerEntry>, onUpdate: (List<LedgerEntry>) -> Unit) {
+    val context = LocalContext.current
     var amountInput by remember { mutableStateOf("") }
     var detailInput by remember { mutableStateOf("") }
     var selectedType by remember { mutableStateOf("CR") }
+    var selectedDate by remember { mutableStateOf(SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())) }
+
+    val calendar = Calendar.getInstance()
+    val datePickerDialog = DatePickerDialog(
+        context,
+        { _, year, month, dayOfMonth ->
+            selectedDate = String.format(Locale.getDefault(), "%04d-%02d-%02d", year, month + 1, dayOfMonth)
+        },
+        calendar.get(Calendar.YEAR), calendar.get(Calendar.MONTH), calendar.get(Calendar.DAY_OF_MONTH)
+    )
 
     val totalCr = entries.filter { it.type == "CR" }.sumOf { it.amount }
     val totalDr = entries.filter { it.type == "DR" }.sumOf { it.amount }
@@ -236,13 +287,22 @@ fun CRDRView(entries: List<LedgerEntry>, onUpdate: (List<LedgerEntry>) -> Unit) 
                     Button(onClick = { selectedType = "CR" }, colors = ButtonDefaults.buttonColors(containerColor = if (selectedType == "CR") Color(0xFF078D62) else Color.LightGray), modifier = Modifier.weight(1f)) { Text("CR") }
                     Button(onClick = { selectedType = "DR" }, colors = ButtonDefaults.buttonColors(containerColor = if (selectedType == "DR") Color(0xFFD9495C) else Color.LightGray), modifier = Modifier.weight(1f)) { Text("DR") }
                 }
+                
+                Box(modifier = Modifier.fillMaxWidth().clickable { datePickerDialog.show() }) {
+                    OutlinedTextField(
+                        value = selectedDate, onValueChange = {}, label = { Text("Date") }, enabled = false,
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = OutlinedTextFieldDefaults.colors(disabledTextColor = Color.Black, disabledBorderColor = Color.LightGray, disabledLabelColor = Color.Gray)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
                 OutlinedTextField(value = detailInput, onValueChange = { detailInput = it }, label = { Text("Message / Details") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
                 Button(
                     onClick = {
                         amountInput.toDoubleOrNull()?.let { amt ->
-                            val date = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
                             val newList = entries.toMutableList()
-                            newList.add(LedgerEntry(amt, selectedType, detailInput, date))
+                            newList.add(LedgerEntry(amt, selectedType, detailInput, selectedDate))
                             onUpdate(newList)
                             amountInput = ""; detailInput = ""
                         }
@@ -277,17 +337,27 @@ fun BalanceCard(title: String, amount: String, modifier: Modifier = Modifier) {
 
 // --- CALCULATOR LOGIC ---
 @Composable
-fun CalculatorView(showDetails: Boolean, calcRows: MutableList<CalcRow>, calcHistory: MutableList<HistoryItem>) {
+fun CalculatorView(showDetails: Boolean, dateOn: Boolean, calcRows: MutableList<CalcRow>, calcHistory: MutableList<HistoryItem>) {
+    val context = LocalContext.current
     var v by remember { mutableStateOf("") }
     var l by remember { mutableStateOf("") }
     var operator by remember { mutableStateOf("") }
     var wait by remember { mutableStateOf(false) }
     var rowDetail by remember { mutableStateOf("") }
+    var selectedDate by remember { mutableStateOf(SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())) }
+
+    val calendar = Calendar.getInstance()
+    val datePickerDialog = DatePickerDialog(
+        context,
+        { _, year, month, dayOfMonth ->
+            selectedDate = String.format(Locale.getDefault(), "%04d-%02d-%02d", year, month + 1, dayOfMonth)
+        },
+        calendar.get(Calendar.YEAR), calendar.get(Calendar.MONTH), calendar.get(Calendar.DAY_OF_MONTH)
+    )
 
     fun addRow(sign: String, amount: String) {
         if (amount.isNotEmpty()) {
-            val date = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
-            calcRows.add(CalcRow(date, sign, amount, rowDetail))
+            calcRows.add(CalcRow(selectedDate, sign, amount, rowDetail))
         }
         rowDetail = ""
     }
@@ -308,9 +378,9 @@ fun CalculatorView(showDetails: Boolean, calcRows: MutableList<CalcRow>, calcHis
         
         val resultStr = if (r % 1.0 == 0.0) r.toLong().toString() else r.toString()
         val expr = "$l $operator $v"
-        val date = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date())
+        val currentDate = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date())
         
-        calcHistory.add(0, HistoryItem(System.currentTimeMillis(), expr, resultStr, date, calcRows.toList()))
+        calcHistory.add(0, HistoryItem(System.currentTimeMillis(), expr, resultStr, currentDate, calcRows.toList()))
         
         v = resultStr
         l = ""
@@ -346,84 +416,8 @@ fun CalculatorView(showDetails: Boolean, calcRows: MutableList<CalcRow>, calcHis
 
     Column(modifier = Modifier.fillMaxSize()) {
         
-        // When details are disabled, push the display/keypad down to prevent awkward stretching
-        if (!showDetails) {
-            Spacer(modifier = Modifier.weight(1f))
-        }
-        
-        // DETAILS LIST (Receives massive space increase)
-        if (showDetails) {
-            Column(modifier = Modifier.weight(1.8f).fillMaxWidth().background(Color.White).padding(8.dp)) {
-                Text("Calculation Summary (${calcRows.size} entries)", fontWeight = FontWeight.Bold, fontSize = 12.sp, modifier = Modifier.padding(bottom = 8.dp))
-                LazyColumn(modifier = Modifier.weight(1f)) {
-                    items(calcRows) { row ->
-                        Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Column(modifier = Modifier.weight(2f)) {
-                                Text(row.date, fontSize = 10.sp, color = Color.Gray)
-                                Text(row.detail.ifEmpty { "Entry" }, color = Color.Gray)
-                            }
-                            Text("${row.sign} ${row.amount}", fontWeight = FontWeight.Bold, color = if (row.sign == "-") Color.Red else Color(0xFF078D62), modifier = Modifier.weight(1f), textAlign = TextAlign.End)
-                        }
-                    }
-                }
-                OutlinedTextField(value = rowDetail, onValueChange = { rowDetail = it }, label = { Text("Details (Tea, milk...)") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
-            }
-        }
-        
-        // CALCULATION DISPLAY
-        Column(modifier = Modifier.fillMaxWidth().height(110.dp).background(Color(0xFF111827)).padding(16.dp), verticalArrangement = Arrangement.Bottom, horizontalAlignment = Alignment.End) {
-            Text("$l ${if(operator == "*") "×" else if(operator == "/") "÷" else operator}", color = Color(0xFFAEB8C8), fontSize = 20.sp)
-            Text(if (v.isEmpty()) "0" else v, color = Color.White, fontSize = 48.sp, fontWeight = FontWeight.Black)
-        }
-        
-        val keys = listOf(
-            listOf(Triple("AC", "danger", { v = ""; l = ""; operator = ""; wait = false; calcRows.clear() }), Triple("⌫", "soft", { v = v.dropLast(1) }), Triple("%", "soft", { if(v.isNotEmpty()) v = (v.toDouble()/100).toString() }), Triple("÷", "op", { opSet("/") })),
-            listOf(Triple("7", "normal", { num("7") }), Triple("8", "normal", { num("8") }), Triple("9", "normal", { num("9") }), Triple("×", "op", { opSet("*") })),
-            listOf(Triple("4", "normal", { num("4") }), Triple("5", "normal", { num("5") }), Triple("6", "normal", { num("6") }), Triple("−", "op", { opSet("-") })),
-            listOf(Triple("1", "normal", { num("1") }), Triple("2", "normal", { num("2") }), Triple("3", "normal", { num("3") }), Triple("+", "op", { opSet("+") })),
-            listOf(Triple("00", "soft", { num("00") }), Triple("0", "normal", { num("0") }), Triple(".", "normal", { if(!v.contains(".")) v += "." }), Triple("=", "eq", { evaluate() }))
-        )
-        
-        // KEYPAD (Weight reduced by ~35% to give room for details list)
-        Column(modifier = Modifier.padding(8.dp).weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            for (row in keys) {
-                Row(modifier = Modifier.weight(1f).fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    for (key in row) { CalcButton(text = key.first, type = key.second, modifier = Modifier.weight(1f)) { key.third() } }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun HistoryView(history: List<HistoryItem>, onClose: () -> Unit) {
-    Column(modifier = Modifier.fillMaxSize().padding(12.dp)) {
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            Text("History", fontWeight = FontWeight.Bold, fontSize = 18.sp)
-            Button(onClick = onClose) { Text("Close") }
-        }
-        Spacer(modifier = Modifier.height(12.dp))
-        LazyColumn {
-            items(history) { item ->
-                Card(modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Text(item.expr, color = Color.Gray)
-                        Text("= ${item.result}", fontWeight = FontWeight.Black, fontSize = 24.sp)
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun CalcButton(text: String, type: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
-    val bgColor = when (type) { "danger" -> Color(0xFFFFF0F2); "soft" -> Color(0xFFEDF1F6); "op" -> Color(0xFFEEEBFF); "eq" -> Color.Transparent; else -> Color.White }
-    val textColor = when (type) { "danger" -> Color(0xFFD9495C); "op" -> Color(0xFF574BD3); "eq" -> Color.White; else -> Color(0xFF172033) }
-    Box(
-        modifier = modifier.fillMaxHeight().shadow(2.dp, RoundedCornerShape(13.dp))
-            .background(if (type == "eq") Brush.linearGradient(listOf(Color(0xFF5959DD), Color(0xFF8050EE))) else androidx.compose.ui.graphics.SolidColor(bgColor), RoundedCornerShape(13.dp))
-            .clip(RoundedCornerShape(13.dp)).clickable { onClick() },
-        contentAlignment = Alignment.Center
-    ) { Text(text, color = textColor, fontSize = 24.sp, fontWeight = FontWeight.Bold) }
-}
+        // Flexible space at the top so keypad NEVER shrinks
+        Box(modifier = Modifier.weight(1f)) {
+            if (showDetails) {
+                Column(modifier = Modifier.fillMaxSize().background(Color.White).padding(8.dp)) {
+                    Text("Calculation Summary (${calcRows.size}
