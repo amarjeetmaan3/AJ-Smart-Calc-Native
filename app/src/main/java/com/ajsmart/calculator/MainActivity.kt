@@ -36,17 +36,14 @@ class MainActivity : ComponentActivity() {
 
 // Data Classes
 data class LedgerEntry(val amount: Double, val type: String, val details: String, val date: String)
-data class CalcRow(val sign: String, val amount: String, val detail: String)
-data class HistoryItem(val expr: String, val result: String, val date: String, val rows: List<CalcRow>)
+data class HistoryItem(val expression: String, val result: String, val date: String)
 
 @Composable
 fun AJSmartCalculatorApp() {
     var currentMode by remember { mutableStateOf("CALC") }
-    var showDetails by remember { mutableStateOf(false) }
     var showHistory by remember { mutableStateOf(false) }
     
     val calcHistory = remember { mutableStateListOf<HistoryItem>() }
-    val calcRows = remember { mutableStateListOf<CalcRow>() }
 
     Column(modifier = Modifier.fillMaxSize().background(Color(0xFFF3F5FA))) {
         // TOP HEADER
@@ -58,11 +55,8 @@ fun AJSmartCalculatorApp() {
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text("AJ Smart Calculator", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Black, modifier = Modifier.weight(1f))
-            
-            // Toolbar Options
-            Text("📝", modifier = Modifier.padding(horizontal = 8.dp).clickable { showDetails = !showDetails; showHistory = false }, fontSize = 20.sp)
             Text("📄", modifier = Modifier.padding(horizontal = 8.dp).clickable { /* PDF implementation next */ }, fontSize = 20.sp)
-            Text("🕘", modifier = Modifier.padding(horizontal = 8.dp).clickable { showHistory = !showHistory; showDetails = false }, fontSize = 20.sp)
+            Text("🕘", modifier = Modifier.padding(horizontal = 8.dp).clickable { showHistory = !showHistory }, fontSize = 20.sp)
         }
 
         // MODE SWITCHER
@@ -78,7 +72,7 @@ fun AJSmartCalculatorApp() {
         if (showHistory) {
             HistoryView(calcHistory) { showHistory = false }
         } else if (currentMode == "CALC") {
-            CalculatorView(showDetails, calcRows, calcHistory)
+            CalculatorView(calcHistory)
         } else {
             CRDRView()
         }
@@ -109,16 +103,150 @@ fun HistoryView(history: List<HistoryItem>, onClose: () -> Unit) {
         Spacer(modifier = Modifier.height(12.dp))
         
         if (history.isEmpty()) {
-            Text("No calculations yet.", color = Color.Gray, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
+            Text("No history.", color = Color.Gray, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
         } else {
             LazyColumn(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(history) { item ->
                     Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = Color.White)) {
-                        Column(modifier = Modifier.padding(12.dp)) {
-                            Text(item.expr, color = Color.Gray, fontSize = 14.sp)
-                            Text("= ${item.result}", fontWeight = FontWeight.Black, fontSize = 24.sp, color = Color(0xFF172033))
-                            Text(item.date, fontSize = 10.sp, color = Color.Gray)
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Text(item.expression, color = Color.Gray, fontSize = 16.sp)
+                            Text("= ${item.result}", fontWeight = FontWeight.Black, fontSize = 28.sp, color = Color(0xFF172033))
+                            Text(item.date, fontSize = 10.sp, color = Color.Gray, modifier = Modifier.padding(top = 4.dp))
                         }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun CalculatorView(calcHistory: MutableList<HistoryItem>) {
+    var expression by remember { mutableStateOf("") }
+    var preview by remember { mutableStateOf("") }
+
+    // Native Math Parser (BODMAS Order of Operations)
+    fun calculate(expr: String): String {
+        try {
+            val text = expr.replace("×", "*").replace("÷", "/").replace("−", "-").replace(" ", "")
+            if (text.isEmpty()) return ""
+            
+            val regex = Regex("(?<=[-+*/])|(?=[-+*/])")
+            val tokens = text.split(regex).filter { it.isNotBlank() }.toMutableList()
+            
+            // Handle negative numbers
+            var i = 0
+            while (i < tokens.size) {
+                if ((i == 0 || tokens[i-1] in listOf("+","-","*","/")) && tokens[i] == "-") {
+                    if (i + 1 < tokens.size) {
+                        tokens[i] = "-" + tokens[i+1]
+                        tokens.removeAt(i+1)
+                    }
+                }
+                i++
+            }
+
+            // Multiply & Divide
+            var j = 0
+            while (j < tokens.size) {
+                if (tokens[j] == "*" || tokens[j] == "/") {
+                    if (j + 1 >= tokens.size) return "" // Incomplete expression
+                    val a = tokens[j-1].toDouble()
+                    val b = tokens[j+1].toDouble()
+                    val res = if (tokens[j] == "*") a * b else a / b
+                    tokens[j-1] = res.toString()
+                    tokens.removeAt(j)
+                    tokens.removeAt(j)
+                    j--
+                }
+                j++
+            }
+            
+            // Add & Subtract
+            var k = 0
+            while (k < tokens.size) {
+                if (tokens[k] == "+" || tokens[k] == "-") {
+                    if (k + 1 >= tokens.size) return ""
+                    val a = tokens[k-1].toDouble()
+                    val b = tokens[k+1].toDouble()
+                    val res = if (tokens[k] == "+") a + b else a - b
+                    tokens[k-1] = res.toString()
+                    tokens.removeAt(k)
+                    tokens.removeAt(k)
+                    k--
+                }
+                k++
+            }
+            
+            val finalRes = tokens[0].toDouble()
+            return if (finalRes % 1.0 == 0.0) finalRes.toLong().toString() else finalRes.toString()
+        } catch (e: Exception) {
+            return ""
+        }
+    }
+
+    fun updatePreview() {
+        preview = calculate(expression)
+    }
+
+    fun append(str: String) {
+        val operators = listOf(" + ", " − ", " × ", " ÷ ")
+        if (str in operators) {
+            if (expression.isNotEmpty() && !expression.endsWith(" ")) {
+                expression += str
+            }
+        } else {
+            expression += str
+        }
+        updatePreview()
+    }
+
+    fun onEqual() {
+        if (preview.isNotEmpty()) {
+            val date = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date())
+            calcHistory.add(0, HistoryItem(expression, preview, date))
+            expression = preview
+            preview = ""
+        }
+    }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        
+        // Display Area (Android Calculator Style)
+        Column(
+            modifier = Modifier.fillMaxWidth().height(160.dp).background(Color(0xFF111827)).padding(16.dp),
+            verticalArrangement = Arrangement.Bottom,
+            horizontalAlignment = Alignment.End
+        ) {
+            Text(
+                text = expression, 
+                color = Color.White, 
+                fontSize = if (expression.length > 15) 32.sp else 48.sp, 
+                fontWeight = FontWeight.Black,
+                textAlign = TextAlign.End,
+                maxLines = 2
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = if (preview.isNotEmpty()) "= $preview" else "", 
+                color = Color(0xFFAEB8C8), 
+                fontSize = 24.sp
+            )
+        }
+
+        val keys = listOf(
+            listOf(Triple("AC", "danger", { expression = ""; preview = "" }), Triple("⌫", "soft", { if(expression.isNotEmpty()) { expression = expression.dropLast(if (expression.endsWith(" ")) 3 else 1); updatePreview() } }), Triple("%", "soft", { /* Percentage logic requires advanced parsing */ }), Triple("÷", "op", { append(" ÷ ") })),
+            listOf(Triple("7", "normal", { append("7") }), Triple("8", "normal", { append("8") }), Triple("9", "normal", { append("9") }), Triple("×", "op", { append(" × ") })),
+            listOf(Triple("4", "normal", { append("4") }), Triple("5", "normal", { append("5") }), Triple("6", "normal", { append("6") }), Triple("−", "op", { append(" − ") })),
+            listOf(Triple("1", "normal", { append("1") }), Triple("2", "normal", { append("2") }), Triple("3", "normal", { append("3") }), Triple("+", "op", { append(" + ") })),
+            listOf(Triple("00", "soft", { append("00") }), Triple("0", "normal", { append("0") }), Triple(".", "normal", { append(".") }), Triple("=", "eq", { onEqual() }))
+        )
+
+        Column(modifier = Modifier.padding(8.dp).weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            for (row in keys) {
+                Row(modifier = Modifier.weight(1f).fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    for (key in row) {
+                        CalcButton(text = key.first, type = key.second, modifier = Modifier.weight(1f)) { key.third() }
                     }
                 }
             }
@@ -189,126 +317,6 @@ fun BalanceCard(title: String, amount: String, modifier: Modifier = Modifier) {
     Column(modifier = modifier.background(Color.White, RoundedCornerShape(8.dp)).padding(8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         Text(title, fontSize = 10.sp, color = Color.Gray)
         Text(amount, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-    }
-}
-
-@Composable
-fun CalculatorView(showDetails: Boolean, calcRows: MutableList<CalcRow>, calcHistory: MutableList<HistoryItem>) {
-    var v by remember { mutableStateOf("") }
-    var l by remember { mutableStateOf("") }
-    var operator by remember { mutableStateOf("") }
-    var wait by remember { mutableStateOf(false) }
-    var rowDetail by remember { mutableStateOf("") }
-
-    fun addRow(sign: String, amount: String) {
-        if (amount.isNotEmpty()) calcRows.add(CalcRow(sign, amount, rowDetail))
-        rowDetail = ""
-    }
-
-    fun evaluate() {
-        if (l.isEmpty() || operator.isEmpty() || v.isEmpty()) return
-        if (showDetails) addRow(operator, v)
-        
-        val a = l.toDoubleOrNull() ?: 0.0
-        val b = v.toDoubleOrNull() ?: 0.0
-        var r = 0.0
-        when (operator) {
-            "+" -> r = a + b
-            "-" -> r = a - b
-            "*" -> r = a * b
-            "/" -> if (b != 0.0) r = a / b
-        }
-        
-        val resultStr = if (r % 1.0 == 0.0) r.toLong().toString() else r.toString()
-        val expr = "$l $operator $v"
-        val date = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date())
-        
-        calcHistory.add(0, HistoryItem(expr, resultStr, date, calcRows.toList()))
-        
-        v = resultStr
-        l = ""
-        operator = ""
-        wait = true
-        calcRows.clear()
-    }
-
-    fun num(n: String) {
-        if (wait) { v = ""; wait = false }
-        if (n == "00" && v == "") v = "0"
-        else if (v == "0") v = if (n == "00") "0" else n
-        else v += n
-    }
-
-    fun opSet(o: String) {
-        if (v.isEmpty() && l.isEmpty()) return
-        
-        if (l.isNotEmpty() && v.isNotEmpty() && operator.isNotEmpty()) {
-            evaluate()
-            l = v
-            v = ""
-            operator = o
-            wait = false
-            return
-        }
-        
-        if (v.isNotEmpty()) {
-            if (showDetails && l.isEmpty()) addRow("", v)
-            l = v
-            v = ""
-            wait = false
-        }
-        operator = o
-    }
-
-    Column(modifier = Modifier.fillMaxSize()) {
-        
-        if (showDetails) {
-            Column(modifier = Modifier.weight(1f).fillMaxWidth().background(Color.White).padding(8.dp)) {
-                Text("Calculation Summary (${calcRows.size} entries)", fontWeight = FontWeight.Bold, fontSize = 12.sp, modifier = Modifier.padding(bottom = 8.dp))
-                LazyColumn(modifier = Modifier.weight(1f)) {
-                    items(calcRows) { row ->
-                        Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-                            Text("${row.sign} ${row.amount}", fontWeight = FontWeight.Bold, color = if (row.sign == "-") Color.Red else Color(0xFF078D62), modifier = Modifier.weight(1f))
-                            Text(row.detail, color = Color.Gray, modifier = Modifier.weight(2f))
-                        }
-                    }
-                }
-                OutlinedTextField(
-                    value = rowDetail, 
-                    onValueChange = { rowDetail = it }, 
-                    label = { Text("Details (Tea, milk...)") },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true
-                )
-            }
-        }
-
-        Column(
-            modifier = Modifier.fillMaxWidth().height(110.dp).background(Color(0xFF111827)).padding(16.dp),
-            verticalArrangement = Arrangement.Bottom,
-            horizontalAlignment = Alignment.End
-        ) {
-            Text("$l ${if(operator == "*") "×" else if(operator == "/") "÷" else operator}", color = Color(0xFFAEB8C8), fontSize = 20.sp)
-            Text(if (v.isEmpty()) "0" else v, color = Color.White, fontSize = 48.sp, fontWeight = FontWeight.Black)
-        }
-
-        val keys = listOf(
-            listOf(Triple("AC", "danger", { v = ""; l = ""; operator = ""; wait = false; calcRows.clear() }), Triple("⌫", "soft", { v = v.dropLast(1) }), Triple("%", "soft", { if(v.isNotEmpty()) v = (v.toDouble()/100).toString() }), Triple("÷", "op", { opSet("/") })),
-            listOf(Triple("7", "normal", { num("7") }), Triple("8", "normal", { num("8") }), Triple("9", "normal", { num("9") }), Triple("×", "op", { opSet("*") })),
-            listOf(Triple("4", "normal", { num("4") }), Triple("5", "normal", { num("5") }), Triple("6", "normal", { num("6") }), Triple("−", "op", { opSet("-") })),
-            listOf(Triple("1", "normal", { num("1") }), Triple("2", "normal", { num("2") }), Triple("3", "normal", { num("3") }), Triple("+", "op", { opSet("+") })),
-            listOf(Triple("00", "soft", { num("00") }), Triple("0", "normal", { num("0") }), Triple(".", "normal", { if(!v.contains(".")) v += "." }), Triple("=", "eq", { evaluate() }))
-        )
-
-        Column(modifier = Modifier.padding(8.dp).weight(if (showDetails) 1.5f else 2f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            for (row in keys) {
-                Row(modifier = Modifier.weight(1f).fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    for (key in row) {
-                        CalcButton(text = key.first, type = key.second, modifier = Modifier.weight(1f)) { key.third() }
-                    }
-                }
-            }
-        }
     }
 }
 
