@@ -1,8 +1,15 @@
 package com.ajsmart.calculator
 
+import android.content.Context
+import android.graphics.Paint
+import android.graphics.pdf.PdfDocument
+import android.net.Uri
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -17,6 +24,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -34,232 +42,143 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-// Data Classes
+// --- DATA CLASSES ---
 data class LedgerEntry(val amount: Double, val type: String, val details: String, val date: String)
-data class HistoryItem(val expression: String, val result: String, val date: String)
+data class CalcRow(val sign: String, val amount: String, val detail: String)
+data class HistoryItem(val id: Long, val expr: String, val result: String, val date: String, val rows: List<CalcRow>)
 
+// --- LOCAL STORAGE MANAGER (SharedPreferences) ---
+object StorageManager {
+    fun saveCRDR(context: Context, entries: List<LedgerEntry>) {
+        val prefs = context.getSharedPreferences("AJ_PREFS", Context.MODE_PRIVATE)
+        val data = entries.joinToString("|||") { "${it.amount}::${it.type}::${it.details}::${it.date}" }
+        prefs.edit().putString("CRDR_DATA", data).apply()
+    }
+
+    fun loadCRDR(context: Context): List<LedgerEntry> {
+        val prefs = context.getSharedPreferences("AJ_PREFS", Context.MODE_PRIVATE)
+        val data = prefs.getString("CRDR_DATA", "") ?: ""
+        if (data.isEmpty()) return emptyList()
+        return data.split("|||").mapNotNull {
+            val parts = it.split("::")
+            if (parts.size == 4) LedgerEntry(parts[0].toDoubleOrNull() ?: 0.0, parts[1], parts[2], parts[3]) else null
+        }
+    }
+}
+
+// --- PDF GENERATOR ENGINE ---
+fun generatePdf(context: Context, uri: Uri, title: String, content: List<String>) {
+    try {
+        val pdf = PdfDocument()
+        var pageInfo = PdfDocument.PageInfo.Builder(595, 842, 1).create() // A4 Size
+        var page = pdf.startPage(pageInfo)
+        var canvas = page.canvas
+        val paint = Paint().apply { color = android.graphics.Color.BLACK; textSize = 14f }
+        val titlePaint = Paint().apply { color = android.graphics.Color.BLACK; textSize = 22f; isFakeBoldText = true }
+
+        var y = 50f
+        canvas.drawText(title, 50f, y, titlePaint)
+        y += 40f
+
+        for (line in content) {
+            if (y > 800f) {
+                pdf.finishPage(page)
+                pageInfo = PdfDocument.PageInfo.Builder(595, 842, 2).create()
+                page = pdf.startPage(pageInfo)
+                canvas = page.canvas
+                y = 50f
+            }
+            canvas.drawText(line, 50f, y, paint)
+            y += 20f
+        }
+
+        pdf.finishPage(page)
+        context.contentResolver.openOutputStream(uri)?.use { pdf.writeTo(it) }
+        pdf.close()
+        Toast.makeText(context, "PDF Saved!", Toast.LENGTH_SHORT).show()
+    } catch (e: Exception) {
+        Toast.makeText(context, "Failed to save PDF", Toast.LENGTH_SHORT).show()
+    }
+}
+
+// --- MAIN APP UI ---
 @Composable
 fun AJSmartCalculatorApp() {
     var currentMode by remember { mutableStateOf("CALC") }
+    var showDetails by remember { mutableStateOf(false) }
     var showHistory by remember { mutableStateOf(false) }
-    
+    val context = LocalContext.current
+
     val calcHistory = remember { mutableStateListOf<HistoryItem>() }
+    val calcRows = remember { mutableStateListOf<CalcRow>() }
+    val crdrEntries = remember { mutableStateListOf<LedgerEntry>().apply { addAll(StorageManager.loadCRDR(context)) } }
+
+    // PDF Saver Launcher
+    val pdfLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/pdf")) { uri ->
+        if (uri != null) {
+            val contentLines = mutableListOf<String>()
+            if (currentMode == "CRDR") {
+                contentLines.add("Date        | Amount       | Type | Details")
+                contentLines.add("--------------------------------------------------")
+                crdrEntries.forEach { contentLines.add("${it.date} | Rs.${it.amount} | ${it.type}   | ${it.details}") }
+                generatePdf(context, uri, "AJ Smart CR/DR Statement", contentLines)
+            } else {
+                contentLines.add("Sign | Amount       | Details")
+                contentLines.add("--------------------------------------------------")
+                calcRows.forEach { contentLines.add(" ${it.sign}   | Rs.${it.amount} | ${it.detail}") }
+                generatePdf(context, uri, "AJ Smart Calculation", contentLines)
+            }
+        }
+    }
 
     Column(modifier = Modifier.fillMaxSize().background(Color(0xFFF3F5FA))) {
         // TOP HEADER
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(Brush.linearGradient(listOf(Color(0xFF5959DD), Color(0xFF8050EE))))
-                .padding(horizontal = 12.dp, vertical = 16.dp),
+            modifier = Modifier.fillMaxWidth().background(Brush.linearGradient(listOf(Color(0xFF5959DD), Color(0xFF8050EE)))).padding(12.dp, 16.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text("AJ Smart Calculator", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Black, modifier = Modifier.weight(1f))
-            Text("📄", modifier = Modifier.padding(horizontal = 8.dp).clickable { /* PDF implementation next */ }, fontSize = 20.sp)
-            Text("🕘", modifier = Modifier.padding(horizontal = 8.dp).clickable { showHistory = !showHistory }, fontSize = 20.sp)
+            Text("📝", modifier = Modifier.padding(horizontal = 8.dp).clickable { showDetails = !showDetails; showHistory = false }, fontSize = 20.sp)
+            Text("📄", modifier = Modifier.padding(horizontal = 8.dp).clickable { 
+                val fileName = if (currentMode == "CRDR") "AJ_CRDR_Report.pdf" else "AJ_Calc_Report.pdf"
+                pdfLauncher.launch(fileName) 
+            }, fontSize = 20.sp)
+            Text("🕘", modifier = Modifier.padding(horizontal = 8.dp).clickable { showHistory = !showHistory; showDetails = false }, fontSize = 20.sp)
         }
 
         // MODE SWITCHER
-        Row(
-            modifier = Modifier.fillMaxWidth().background(Color.White).padding(8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
+        Row(modifier = Modifier.fillMaxWidth().background(Color.White).padding(8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             ModeButton("CALCULATOR", currentMode == "CALC", Modifier.weight(1f)) { currentMode = "CALC"; showHistory = false }
             ModeButton("CR / DR", currentMode == "CRDR", Modifier.weight(1f)) { currentMode = "CRDR"; showHistory = false }
         }
 
-        // VIEW ROUTING
         if (showHistory) {
             HistoryView(calcHistory) { showHistory = false }
         } else if (currentMode == "CALC") {
-            CalculatorView(calcHistory)
+            CalculatorView(showDetails, calcRows, calcHistory)
         } else {
-            CRDRView()
+            CRDRView(crdrEntries) { updatedList ->
+                crdrEntries.clear()
+                crdrEntries.addAll(updatedList)
+                StorageManager.saveCRDR(context, crdrEntries)
+            }
         }
     }
 }
 
 @Composable
 fun ModeButton(text: String, isActive: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
-    Box(
-        modifier = modifier
-            .height(44.dp)
-            .clip(RoundedCornerShape(9.dp))
-            .background(if (isActive) Color(0xFFE9E8FF) else Color.Transparent)
-            .clickable { onClick() },
-        contentAlignment = Alignment.Center
-    ) {
+    Box(modifier = modifier.height(44.dp).clip(RoundedCornerShape(9.dp)).background(if (isActive) Color(0xFFE9E8FF) else Color.Transparent).clickable { onClick() }, contentAlignment = Alignment.Center) {
         Text(text, color = if (isActive) Color(0xFF574BD2) else Color(0xFF687386), fontWeight = FontWeight.Bold)
     }
 }
 
+// --- CR/DR LOGIC ---
 @Composable
-fun HistoryView(history: List<HistoryItem>, onClose: () -> Unit) {
-    Column(modifier = Modifier.fillMaxSize().padding(12.dp)) {
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            Text("Calculation History", fontWeight = FontWeight.Bold, fontSize = 18.sp)
-            Button(onClick = onClose, colors = ButtonDefaults.buttonColors(containerColor = Color.LightGray)) { Text("Close", color = Color.Black) }
-        }
-        Spacer(modifier = Modifier.height(12.dp))
-        
-        if (history.isEmpty()) {
-            Text("No history.", color = Color.Gray, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
-        } else {
-            LazyColumn(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(history) { item ->
-                    Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = Color.White)) {
-                        Column(modifier = Modifier.padding(16.dp)) {
-                            Text(item.expression, color = Color.Gray, fontSize = 16.sp)
-                            Text("= ${item.result}", fontWeight = FontWeight.Black, fontSize = 28.sp, color = Color(0xFF172033))
-                            Text(item.date, fontSize = 10.sp, color = Color.Gray, modifier = Modifier.padding(top = 4.dp))
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun CalculatorView(calcHistory: MutableList<HistoryItem>) {
-    var expression by remember { mutableStateOf("") }
-    var preview by remember { mutableStateOf("") }
-
-    // Native Math Parser (BODMAS Order of Operations)
-    fun calculate(expr: String): String {
-        try {
-            val text = expr.replace("×", "*").replace("÷", "/").replace("−", "-").replace(" ", "")
-            if (text.isEmpty()) return ""
-            
-            val regex = Regex("(?<=[-+*/])|(?=[-+*/])")
-            val tokens = text.split(regex).filter { it.isNotBlank() }.toMutableList()
-            
-            // Handle negative numbers
-            var i = 0
-            while (i < tokens.size) {
-                if ((i == 0 || tokens[i-1] in listOf("+","-","*","/")) && tokens[i] == "-") {
-                    if (i + 1 < tokens.size) {
-                        tokens[i] = "-" + tokens[i+1]
-                        tokens.removeAt(i+1)
-                    }
-                }
-                i++
-            }
-
-            // Multiply & Divide
-            var j = 0
-            while (j < tokens.size) {
-                if (tokens[j] == "*" || tokens[j] == "/") {
-                    if (j + 1 >= tokens.size) return "" // Incomplete expression
-                    val a = tokens[j-1].toDouble()
-                    val b = tokens[j+1].toDouble()
-                    val res = if (tokens[j] == "*") a * b else a / b
-                    tokens[j-1] = res.toString()
-                    tokens.removeAt(j)
-                    tokens.removeAt(j)
-                    j--
-                }
-                j++
-            }
-            
-            // Add & Subtract
-            var k = 0
-            while (k < tokens.size) {
-                if (tokens[k] == "+" || tokens[k] == "-") {
-                    if (k + 1 >= tokens.size) return ""
-                    val a = tokens[k-1].toDouble()
-                    val b = tokens[k+1].toDouble()
-                    val res = if (tokens[k] == "+") a + b else a - b
-                    tokens[k-1] = res.toString()
-                    tokens.removeAt(k)
-                    tokens.removeAt(k)
-                    k--
-                }
-                k++
-            }
-            
-            val finalRes = tokens[0].toDouble()
-            return if (finalRes % 1.0 == 0.0) finalRes.toLong().toString() else finalRes.toString()
-        } catch (e: Exception) {
-            return ""
-        }
-    }
-
-    fun updatePreview() {
-        preview = calculate(expression)
-    }
-
-    fun append(str: String) {
-        val operators = listOf(" + ", " − ", " × ", " ÷ ")
-        if (str in operators) {
-            if (expression.isNotEmpty() && !expression.endsWith(" ")) {
-                expression += str
-            }
-        } else {
-            expression += str
-        }
-        updatePreview()
-    }
-
-    fun onEqual() {
-        if (preview.isNotEmpty()) {
-            val date = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date())
-            calcHistory.add(0, HistoryItem(expression, preview, date))
-            expression = preview
-            preview = ""
-        }
-    }
-
-    Column(modifier = Modifier.fillMaxSize()) {
-        
-        // Display Area (Android Calculator Style)
-        Column(
-            modifier = Modifier.fillMaxWidth().height(160.dp).background(Color(0xFF111827)).padding(16.dp),
-            verticalArrangement = Arrangement.Bottom,
-            horizontalAlignment = Alignment.End
-        ) {
-            Text(
-                text = expression, 
-                color = Color.White, 
-                fontSize = if (expression.length > 15) 32.sp else 48.sp, 
-                fontWeight = FontWeight.Black,
-                textAlign = TextAlign.End,
-                maxLines = 2
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = if (preview.isNotEmpty()) "= $preview" else "", 
-                color = Color(0xFFAEB8C8), 
-                fontSize = 24.sp
-            )
-        }
-
-        val keys = listOf(
-            listOf(Triple("AC", "danger", { expression = ""; preview = "" }), Triple("⌫", "soft", { if(expression.isNotEmpty()) { expression = expression.dropLast(if (expression.endsWith(" ")) 3 else 1); updatePreview() } }), Triple("%", "soft", { /* Percentage logic requires advanced parsing */ }), Triple("÷", "op", { append(" ÷ ") })),
-            listOf(Triple("7", "normal", { append("7") }), Triple("8", "normal", { append("8") }), Triple("9", "normal", { append("9") }), Triple("×", "op", { append(" × ") })),
-            listOf(Triple("4", "normal", { append("4") }), Triple("5", "normal", { append("5") }), Triple("6", "normal", { append("6") }), Triple("−", "op", { append(" − ") })),
-            listOf(Triple("1", "normal", { append("1") }), Triple("2", "normal", { append("2") }), Triple("3", "normal", { append("3") }), Triple("+", "op", { append(" + ") })),
-            listOf(Triple("00", "soft", { append("00") }), Triple("0", "normal", { append("0") }), Triple(".", "normal", { append(".") }), Triple("=", "eq", { onEqual() }))
-        )
-
-        Column(modifier = Modifier.padding(8.dp).weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            for (row in keys) {
-                Row(modifier = Modifier.weight(1f).fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    for (key in row) {
-                        CalcButton(text = key.first, type = key.second, modifier = Modifier.weight(1f)) { key.third() }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun CRDRView() {
+fun CRDRView(entries: List<LedgerEntry>, onUpdate: (List<LedgerEntry>) -> Unit) {
     var amountInput by remember { mutableStateOf("") }
     var detailInput by remember { mutableStateOf("") }
     var selectedType by remember { mutableStateOf("CR") }
-    val entries = remember { mutableStateListOf<LedgerEntry>() }
 
     val totalCr = entries.filter { it.type == "CR" }.sumOf { it.amount }
     val totalDr = entries.filter { it.type == "DR" }.sumOf { it.amount }
@@ -272,9 +191,7 @@ fun CRDRView() {
             BalanceCard("TOTAL DR", "₹$totalDr", Modifier.weight(1f))
             BalanceCard("BALANCE", "₹$balance $balanceType", Modifier.weight(1f))
         }
-
         Spacer(modifier = Modifier.height(12.dp))
-
         Card(modifier = Modifier.fillMaxWidth().shadow(4.dp, RoundedCornerShape(12.dp)), colors = CardDefaults.cardColors(containerColor = Color.White)) {
             Column(modifier = Modifier.padding(12.dp)) {
                 OutlinedTextField(value = amountInput, onValueChange = { amountInput = it }, label = { Text("Amount") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
@@ -287,7 +204,9 @@ fun CRDRView() {
                     onClick = {
                         amountInput.toDoubleOrNull()?.let { amt ->
                             val date = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
-                            entries.add(LedgerEntry(amt, selectedType, detailInput, date))
+                            val newList = entries.toMutableList()
+                            newList.add(LedgerEntry(amt, selectedType, detailInput, date))
+                            onUpdate(newList)
                             amountInput = ""; detailInput = ""
                         }
                     },
@@ -296,11 +215,10 @@ fun CRDRView() {
                 ) { Text("＋ Add Entry") }
             }
         }
-
         Spacer(modifier = Modifier.height(12.dp))
         LazyColumn(modifier = Modifier.fillMaxSize()) {
-            items(entries) { entry ->
-                Row(modifier = Modifier.fillMaxWidth().background(Color.White, RoundedCornerShape(8.dp)).padding(12.dp).padding(bottom = 4.dp)) {
+            items(entries.reversed()) { entry ->
+                Row(modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp).background(Color.White, RoundedCornerShape(8.dp)).padding(12.dp)) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(entry.date, fontSize = 10.sp, color = Color.Gray)
                         Text(entry.details, fontWeight = FontWeight.Bold)
@@ -320,11 +238,133 @@ fun BalanceCard(title: String, amount: String, modifier: Modifier = Modifier) {
     }
 }
 
+// --- CALCULATOR LOGIC ---
+@Composable
+fun CalculatorView(showDetails: Boolean, calcRows: MutableList<CalcRow>, calcHistory: MutableList<HistoryItem>) {
+    var v by remember { mutableStateOf("") }
+    var l by remember { mutableStateOf("") }
+    var operator by remember { mutableStateOf("") }
+    var wait by remember { mutableStateOf(false) }
+    var rowDetail by remember { mutableStateOf("") }
+
+    fun addRow(sign: String, amount: String) {
+        if (amount.isNotEmpty()) calcRows.add(CalcRow(sign, amount, rowDetail))
+        rowDetail = ""
+    }
+
+    fun evaluate() {
+        if (l.isEmpty() || operator.isEmpty() || v.isEmpty()) return
+        if (showDetails) addRow(operator, v)
+        
+        val a = l.toDoubleOrNull() ?: 0.0
+        val b = v.toDoubleOrNull() ?: 0.0
+        var r = 0.0
+        when (operator) {
+            "+" -> r = a + b
+            "-" -> r = a - b
+            "*" -> r = a * b
+            "/" -> if (b != 0.0) r = a / b
+        }
+        
+        val resultStr = if (r % 1.0 == 0.0) r.toLong().toString() else r.toString()
+        val expr = "$l $operator $v"
+        val date = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date())
+        
+        calcHistory.add(0, HistoryItem(System.currentTimeMillis(), expr, resultStr, date, calcRows.toList()))
+        
+        v = resultStr
+        l = ""
+        operator = ""
+        wait = true
+    }
+
+    fun num(n: String) {
+        if (wait) { v = ""; wait = false }
+        if (n == "00" && v == "") v = "0"
+        else if (v == "0") v = if (n == "00") "0" else n
+        else v += n
+    }
+
+    fun opSet(o: String) {
+        if (v.isEmpty() && l.isEmpty()) return
+        if (l.isNotEmpty() && v.isNotEmpty() && operator.isNotEmpty()) {
+            evaluate()
+            l = v
+            v = ""
+            operator = o
+            wait = false
+            return
+        }
+        if (v.isNotEmpty()) {
+            if (showDetails && l.isEmpty()) addRow(if(o=="-") "-" else "+", v)
+            l = v
+            v = ""
+            wait = false
+        }
+        operator = o
+    }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        if (showDetails) {
+            Column(modifier = Modifier.weight(1f).fillMaxWidth().background(Color.White).padding(8.dp)) {
+                Text("Calculation Summary (${calcRows.size} entries)", fontWeight = FontWeight.Bold, fontSize = 12.sp, modifier = Modifier.padding(bottom = 8.dp))
+                LazyColumn(modifier = Modifier.weight(1f)) {
+                    items(calcRows) { row ->
+                        Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                            Text("${row.sign} ${row.amount}", fontWeight = FontWeight.Bold, color = if (row.sign == "-") Color.Red else Color(0xFF078D62), modifier = Modifier.weight(1f))
+                            Text(row.detail, color = Color.Gray, modifier = Modifier.weight(2f))
+                        }
+                    }
+                }
+                OutlinedTextField(value = rowDetail, onValueChange = { rowDetail = it }, label = { Text("Details (Tea, milk...)") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+            }
+        }
+        Column(modifier = Modifier.fillMaxWidth().height(110.dp).background(Color(0xFF111827)).padding(16.dp), verticalArrangement = Arrangement.Bottom, horizontalAlignment = Alignment.End) {
+            Text("$l ${if(operator == "*") "×" else if(operator == "/") "÷" else operator}", color = Color(0xFFAEB8C8), fontSize = 20.sp)
+            Text(if (v.isEmpty()) "0" else v, color = Color.White, fontSize = 48.sp, fontWeight = FontWeight.Black)
+        }
+        val keys = listOf(
+            listOf(Triple("AC", "danger", { v = ""; l = ""; operator = ""; wait = false; calcRows.clear() }), Triple("⌫", "soft", { v = v.dropLast(1) }), Triple("%", "soft", { if(v.isNotEmpty()) v = (v.toDouble()/100).toString() }), Triple("÷", "op", { opSet("/") })),
+            listOf(Triple("7", "normal", { num("7") }), Triple("8", "normal", { num("8") }), Triple("9", "normal", { num("9") }), Triple("×", "op", { opSet("*") })),
+            listOf(Triple("4", "normal", { num("4") }), Triple("5", "normal", { num("5") }), Triple("6", "normal", { num("6") }), Triple("−", "op", { opSet("-") })),
+            listOf(Triple("1", "normal", { num("1") }), Triple("2", "normal", { num("2") }), Triple("3", "normal", { num("3") }), Triple("+", "op", { opSet("+") })),
+            listOf(Triple("00", "soft", { num("00") }), Triple("0", "normal", { num("0") }), Triple(".", "normal", { if(!v.contains(".")) v += "." }), Triple("=", "eq", { evaluate() }))
+        )
+        Column(modifier = Modifier.padding(8.dp).weight(if (showDetails) 1.5f else 2f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            for (row in keys) {
+                Row(modifier = Modifier.weight(1f).fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    for (key in row) { CalcButton(text = key.first, type = key.second, modifier = Modifier.weight(1f)) { key.third() } }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun HistoryView(history: List<HistoryItem>, onClose: () -> Unit) {
+    Column(modifier = Modifier.fillMaxSize().padding(12.dp)) {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Text("History", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+            Button(onClick = onClose) { Text("Close") }
+        }
+        Spacer(modifier = Modifier.height(12.dp))
+        LazyColumn {
+            items(history) { item ->
+                Card(modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(item.expr, color = Color.Gray)
+                        Text("= ${item.result}", fontWeight = FontWeight.Black, fontSize = 24.sp)
+                    }
+                }
+            }
+        }
+    }
+}
+
 @Composable
 fun CalcButton(text: String, type: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
     val bgColor = when (type) { "danger" -> Color(0xFFFFF0F2); "soft" -> Color(0xFFEDF1F6); "op" -> Color(0xFFEEEBFF); "eq" -> Color.Transparent; else -> Color.White }
     val textColor = when (type) { "danger" -> Color(0xFFD9495C); "op" -> Color(0xFF574BD3); "eq" -> Color.White; else -> Color(0xFF172033) }
-
     Box(
         modifier = modifier.fillMaxHeight().shadow(2.dp, RoundedCornerShape(13.dp))
             .background(if (type == "eq") Brush.linearGradient(listOf(Color(0xFF5959DD), Color(0xFF8050EE))) else androidx.compose.ui.graphics.SolidColor(bgColor), RoundedCornerShape(13.dp))
