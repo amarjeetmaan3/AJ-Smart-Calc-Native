@@ -420,4 +420,91 @@ fun CalculatorView(showDetails: Boolean, dateOn: Boolean, calcRows: MutableList<
         Box(modifier = Modifier.weight(1f)) {
             if (showDetails) {
                 Column(modifier = Modifier.fillMaxSize().background(Color.White).padding(8.dp)) {
-                    Text("Calculation Summary (${calcRows.size}
+                    Text("Calculation Summary (${calcRows.size} entries)", fontWeight = FontWeight.Bold, fontSize = 12.sp, modifier = Modifier.padding(bottom = 8.dp))
+                    LazyColumn(modifier = Modifier.weight(1f)) {
+                        items(calcRows) { row ->
+                            Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Column(modifier = Modifier.weight(2f)) {
+                                    if (dateOn) Text(row.date, fontSize = 10.sp, color = Color.Gray)
+                                    Text(row.detail.ifEmpty { "Entry" }, color = Color.Gray)
+                                }
+                                Text("${row.sign} ${row.amount}", fontWeight = FontWeight.Bold, color = if (row.sign == "-") Color.Red else Color(0xFF078D62), modifier = Modifier.weight(1f), textAlign = TextAlign.End)
+                            }
+                        }
+                    }
+                    
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        if (dateOn) {
+                            Box(modifier = Modifier.weight(1f).clickable { datePickerDialog.show() }) {
+                                OutlinedTextField(
+                                    value = selectedDate, onValueChange = {}, label = { Text("Date") }, enabled = false,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    colors = OutlinedTextFieldDefaults.colors(disabledTextColor = Color.Black, disabledBorderColor = Color.LightGray, disabledLabelColor = Color.Gray)
+                                )
+                            }
+                        }
+                        OutlinedTextField(
+                            value = rowDetail, onValueChange = { rowDetail = it }, label = { Text("Details (Tea, milk...)") },
+                            modifier = Modifier.weight(if (dateOn) 1.5f else 1f), singleLine = true
+                        )
+                    }
+                }
+            }
+        }
+        
+        Column(modifier = Modifier.fillMaxWidth().height(110.dp).background(Color(0xFF111827)).padding(16.dp), verticalArrangement = Arrangement.Bottom, horizontalAlignment = Alignment.End) {
+            Text("$l ${if(operator == "*") "×" else if(operator == "/") "÷" else operator}", color = Color(0xFFAEB8C8), fontSize = 20.sp)
+            Text(if (v.isEmpty()) "0" else v, color = Color.White, fontSize = 48.sp, fontWeight = FontWeight.Black)
+        }
+        
+        val keys = listOf(
+            listOf(Triple("AC", "danger", { v = ""; l = ""; operator = ""; wait = false; calcRows.clear() }), Triple("⌫", "soft", { v = v.dropLast(1) }), Triple("%", "soft", { if(v.isNotEmpty()) v = (v.toDouble()/100).toString() }), Triple("÷", "op", { opSet("/") })),
+            listOf(Triple("7", "normal", { num("7") }), Triple("8", "normal", { num("8") }), Triple("9", "normal", { num("9") }), Triple("×", "op", { opSet("*") })),
+            listOf(Triple("4", "normal", { num("4") }), Triple("5", "normal", { num("5") }), Triple("6", "normal", { num("6") }), Triple("−", "op", { opSet("-") })),
+            listOf(Triple("1", "normal", { num("1") }), Triple("2", "normal", { num("2") }), Triple("3", "normal", { num("3") }), Triple("+", "op", { opSet("+") })),
+            listOf(Triple("00", "soft", { num("00") }), Triple("0", "normal", { num("0") }), Triple(".", "normal", { if(!v.contains(".")) v += "." }), Triple("=", "eq", { evaluate() }))
+        )
+        
+        // Keypad has a FIXED height so it never squishes dynamically
+        Column(modifier = Modifier.fillMaxWidth().height(380.dp).padding(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            for (row in keys) {
+                Row(modifier = Modifier.weight(1f).fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    for (key in row) { CalcButton(text = key.first, type = key.second, modifier = Modifier.weight(1f)) { key.third() } }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun HistoryView(history: List<HistoryItem>, onClose: () -> Unit) {
+    Column(modifier = Modifier.fillMaxSize().padding(12.dp)) {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Text("History", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+            Button(onClick = onClose) { Text("Close") }
+        }
+        Spacer(modifier = Modifier.height(12.dp))
+        LazyColumn {
+            items(history) { item ->
+                Card(modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(item.expr, color = Color.Gray)
+                        Text("= ${item.result}", fontWeight = FontWeight.Black, fontSize = 24.sp)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun CalcButton(text: String, type: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    val bgColor = when (type) { "danger" -> Color(0xFFFFF0F2); "soft" -> Color(0xFFEDF1F6); "op" -> Color(0xFFEEEBFF); "eq" -> Color.Transparent; else -> Color.White }
+    val textColor = when (type) { "danger" -> Color(0xFFD9495C); "op" -> Color(0xFF574BD3); "eq" -> Color.White; else -> Color(0xFF172033) }
+    Box(
+        modifier = modifier.fillMaxHeight().shadow(2.dp, RoundedCornerShape(13.dp))
+            .background(if (type == "eq") Brush.linearGradient(listOf(Color(0xFF5959DD), Color(0xFF8050EE))) else androidx.compose.ui.graphics.SolidColor(bgColor), RoundedCornerShape(13.dp))
+            .clip(RoundedCornerShape(13.dp)).clickable { onClick() },
+        contentAlignment = Alignment.Center
+    ) { Text(text, color = textColor, fontSize = 24.sp, fontWeight = FontWeight.Bold) }
+}
