@@ -19,6 +19,17 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
+      - name: Save App Signature (Cache)
+        uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: aj-smart-keystore
+
+      - name: Auto-Update App Version
+        run: |
+          sed -i 's/versionCode = 1/versionCode = ${{ github.run_number }}/g' app/build.gradle.kts || true
+          sed -i 's/versionName = "1.0"/versionName = "1.${{ github.run_number }}"/g' app/build.gradle.kts || true
+
       - name: Generate Gradle Wrapper
         run: gradle wrapper --gradle-version 8.7
 
@@ -40,4 +51,3 @@ jobs:
         with:
           name: AJ-Build-Results
           path: apk_output/
-          
